@@ -1,5 +1,6 @@
 use clap::Parser;
 use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, Color, Table};
+use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -9,11 +10,14 @@ use std::io::Seek;
 use std::path::PathBuf;
 use std::process;
 
+const BATCH_SIZE: usize = 32_768;
+const PAR_CHUNK_SIZE: usize = 2_048;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "handler",
     version,
-    about = "A fast and simple CLI tool to search CSV files for missing values, type mismatches, outliers, and duplicates — and surgically repair or auto-clean them"
+    about = "A fast and simple CLI tool to search CSV files for missing values, type mismatches, outliers, and duplicates — utilizing multi-core parallelism"
 )]
 struct Cli {
     /// Path to the CSV file (supports --file_path or --file)
@@ -71,6 +75,10 @@ struct Cli {
     /// Run full audit (missing values, type mismatches, outliers, and duplicates)
     #[arg(short = 'a', long = "audit")]
     audit: bool,
+
+    /// Number of worker threads to use (defaults to all available CPU cores)
+    #[arg(long = "threads", value_name = "NUM")]
+    threads: Option<usize>,
 
     /// Output results as JSON for agent tools and automated pipelines
     #[arg(short = 'j', long = "json")]
@@ -152,13 +160,23 @@ impl DataType {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Copy)]
 struct ColTypeStats {
     total_non_missing: usize,
     int_count: usize,
     float_count: usize,
     bool_count: usize,
     date_count: usize,
+}
+
+impl ColTypeStats {
+    fn add_assign(&mut self, other: &ColTypeStats) {
+        self.total_non_missing += other.total_non_missing;
+        self.int_count += other.int_count;
+        self.float_count += other.float_count;
+        self.bool_count += other.bool_count;
+        self.date_count += other.date_count;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -323,6 +341,81 @@ struct PatchReportJson {
     patches_applied: Vec<PatchAppliedJson>,
     rows_dropped: Vec<usize>,
     status: String,
+}
+
+struct BatchStats {
+    missing_counts: Vec<usize>,
+    type_stats: Vec<ColTypeStats>,
+    numeric_values: Vec<Vec<f64>>,
+    rows_with_missing_count: usize,
+    missing_row_samples: Vec<(usize, Vec<String>)>,
+    row_hashes: Vec<(u64, usize, Vec<String>)>,
+    key_occurrences: Vec<(String, usize)>,
+}
+
+impl BatchStats {
+    fn new(col_count: usize) -> Self {
+        Self {
+            missing_counts: vec![0; col_count],
+            type_stats: vec![ColTypeStats::default(); col_count],
+            numeric_values: vec![Vec::new(); col_count],
+            rows_with_missing_count: 0,
+            missing_row_samples: Vec::new(),
+            row_hashes: Vec::new(),
+            key_occurrences: Vec::new(),
+        }
+    }
+
+    fn merge(&mut self, mut other: Self) {
+        for (a, b) in self.missing_counts.iter_mut().zip(other.missing_counts.iter()) {
+            *a += *b;
+        }
+        for (a, b) in self.type_stats.iter_mut().zip(other.type_stats.iter()) {
+            a.add_assign(b);
+        }
+        for (a, b) in self.numeric_values.iter_mut().zip(other.numeric_values.iter_mut()) {
+            a.append(b);
+        }
+        self.rows_with_missing_count += other.rows_with_missing_count;
+        if self.missing_row_samples.len() < 50 {
+            self.missing_row_samples.append(&mut other.missing_row_samples);
+        }
+        self.row_hashes.append(&mut other.row_hashes);
+        self.key_occurrences.append(&mut other.key_occurrences);
+    }
+}
+
+struct Pass2BatchResult {
+    mismatch_counts: Vec<usize>,
+    mismatch_details: Vec<(usize, String, &'static str, String, &'static str)>,
+    outlier_counts: Vec<usize>,
+    outlier_details: Vec<(usize, String, f64, String, String, f64, f64)>,
+}
+
+impl Pass2BatchResult {
+    fn new(col_count: usize) -> Self {
+        Self {
+            mismatch_counts: vec![0; col_count],
+            mismatch_details: Vec::new(),
+            outlier_counts: vec![0; col_count],
+            outlier_details: Vec::new(),
+        }
+    }
+
+    fn merge(&mut self, mut other: Self) {
+        for (a, b) in self.mismatch_counts.iter_mut().zip(other.mismatch_counts.iter()) {
+            *a += *b;
+        }
+        for (a, b) in self.outlier_counts.iter_mut().zip(other.outlier_counts.iter()) {
+            *a += *b;
+        }
+        if self.mismatch_details.len() < 50 {
+            self.mismatch_details.append(&mut other.mismatch_details);
+        }
+        if self.outlier_details.len() < 50 {
+            self.outlier_details.append(&mut other.outlier_details);
+        }
+    }
 }
 
 fn is_missing_value(val: &str) -> bool {
@@ -541,6 +634,13 @@ fn hash_record(record: &csv::StringRecord) -> u64 {
 fn main() {
     let cli = Cli::parse();
 
+    // Configure Rayon thread pool if specified
+    if let Some(num) = cli.threads {
+        if let Err(err) = rayon::ThreadPoolBuilder::new().num_threads(num).build_global() {
+            eprintln!("Warning: Failed to set thread count to {}: {}", num, err);
+        }
+    }
+
     let target_path = match cli.file_path.or(cli.positional_path) {
         Some(path) => path,
         None => {
@@ -578,7 +678,15 @@ fn main() {
 
     // In repair mode, default to smart defaults if specific micro-flags not set
     let (do_drop_dups, do_drop_invalid, do_drop_outliers, do_drop_missing, do_fill_missing, do_coerce) =
-        if is_repair_mode && (cli.fix || cli.drop_duplicates || cli.drop_invalid || cli.drop_outliers || cli.drop_missing || cli.fill_missing || cli.coerce_types) {
+        if is_repair_mode
+            && (cli.fix
+                || cli.drop_duplicates
+                || cli.drop_invalid
+                || cli.drop_outliers
+                || cli.drop_missing
+                || cli.fill_missing
+                || cli.coerce_types)
+        {
             let specific = cli.drop_duplicates
                 || cli.drop_invalid
                 || cli.drop_outliers
@@ -595,7 +703,6 @@ fn main() {
                     cli.coerce_types,
                 )
             } else {
-                // Smart defaults for --fix
                 (true, true, false, false, false, true)
             }
         } else {
@@ -617,7 +724,6 @@ fn main() {
             cli.search_duplicates || cli.key.is_some(),
         )
     } else if is_repair_mode {
-        // In pure repair mode without check flags, don't run diagnostic display unless asked
         (false, false, false, false)
     } else {
         (true, true, true, true)
@@ -648,7 +754,7 @@ fn main() {
 
     let header_names: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
 
-    // Parse surgical patches: "ROW:COL=VALUE"
+    // Parse surgical patches
     let mut surgical_patches: HashMap<(usize, usize), String> = HashMap::new();
     for patch_str in &cli.patch {
         let parts: Vec<&str> = patch_str.splitn(2, ':').collect();
@@ -663,7 +769,10 @@ fn main() {
         let row_num = match parts[0].trim().parse::<usize>() {
             Ok(r) if r >= 1 => r,
             _ => {
-                eprintln!("Error: Invalid row number '{}' in patch '{}'. Row must be >= 1", parts[0], patch_str);
+                eprintln!(
+                    "Error: Invalid row number '{}' in patch '{}'. Row must be >= 1",
+                    parts[0], patch_str
+                );
                 process::exit(1);
             }
         };
@@ -706,7 +815,6 @@ fn main() {
 
     let pinpoint_drop_rows: HashSet<usize> = cli.drop_row.iter().copied().collect();
 
-    // Verify key column if specified
     let key_col_idx = if let Some(ref k) = cli.key {
         match header_names
             .iter()
@@ -726,19 +834,12 @@ fn main() {
         None
     };
 
-    let mut missing_counts = vec![0usize; col_count];
-    let mut type_stats = vec![ColTypeStats::default(); col_count];
-    let mut numeric_values: Vec<Vec<f64>> = vec![Vec::new(); col_count];
+    let mut global_stats = BatchStats::new(col_count);
     let mut total_rows = 0usize;
-    let mut rows_with_missing = 0usize;
-    let mut missing_row_samples: Vec<(usize, Vec<String>)> = Vec::new();
 
-    // Duplicate detection storage
-    let mut row_hashes: HashMap<u64, Vec<(usize, Vec<String>)>> = HashMap::new();
-    let mut key_occurrences: HashMap<String, Vec<usize>> = HashMap::new();
-    let mut duplicate_row_indices: HashSet<usize> = HashSet::new();
+    // Pass 1: Chunked parallel evaluation across all CPU cores
+    let mut batch_records: Vec<(usize, csv::StringRecord)> = Vec::with_capacity(BATCH_SIZE);
 
-    // Pass 1: Missing values, type statistics, numeric values, and duplicates
     for (row_idx, result) in rdr.records().enumerate() {
         let record = match result {
             Ok(rec) => rec,
@@ -749,125 +850,124 @@ fn main() {
         };
 
         total_rows += 1;
-        let mut row_has_missing = false;
-        let mut missing_cols_in_row = Vec::new();
+        batch_records.push((row_idx + 1, record));
 
-        // 1. Missing values & Type stats collection
-        for (col_idx, field) in record.iter().enumerate() {
-            let is_missing = is_missing_value(field);
-
-            if col_idx < col_count {
-                if is_missing {
-                    missing_counts[col_idx] += 1;
-                    row_has_missing = true;
-                    missing_cols_in_row.push(header_names[col_idx].clone());
-                } else {
-                    let trimmed = field.trim();
-                    type_stats[col_idx].total_non_missing += 1;
-
-                    let mut is_num = false;
-                    if is_int_val(trimmed) {
-                        type_stats[col_idx].int_count += 1;
-                        is_num = true;
-                    } else if is_float_val(trimmed) {
-                        type_stats[col_idx].float_count += 1;
-                        is_num = true;
-                    } else if is_bool_val(trimmed) {
-                        type_stats[col_idx].bool_count += 1;
-                    } else if is_date_val(trimmed) {
-                        type_stats[col_idx].date_count += 1;
-                    }
-
-                    if is_num {
-                        if let Ok(num) = trimmed.parse::<f64>() {
-                            numeric_values[col_idx].push(num);
-                        }
-                    }
-                }
-            } else if is_missing {
-                row_has_missing = true;
-                missing_cols_in_row.push(format!("col_{}", col_idx + 1));
-            }
-        }
-
-        if record.len() < col_count {
-            row_has_missing = true;
-            for col_idx in record.len()..col_count {
-                missing_counts[col_idx] += 1;
-                missing_cols_in_row.push(header_names[col_idx].clone());
-            }
-        }
-
-        if row_has_missing {
-            rows_with_missing += 1;
-            if missing_row_samples.len() < 10 || cli.verbose {
-                missing_row_samples.push((row_idx + 1, missing_cols_in_row));
-            }
-        }
-
-        // 2. Duplicate checking collection
-        if check_duplicates || is_repair_mode {
-            if let Some(col_idx) = key_col_idx {
-                if col_idx < record.len() {
-                    let val = record[col_idx].trim().to_string();
-                    if !is_missing_value(&val) {
-                        let entry = key_occurrences.entry(val).or_default();
-                        entry.push(row_idx + 1);
-                        if entry.len() > 1 {
-                            duplicate_row_indices.insert(row_idx + 1);
-                        }
-                    }
-                }
-            } else {
-                let h = hash_record(&record);
-                let fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
-                let bucket = row_hashes.entry(h).or_default();
-                bucket.push((row_idx + 1, fields));
-            }
+        if batch_records.len() >= BATCH_SIZE {
+            let batch_res = process_pass1_batch(
+                &batch_records,
+                col_count,
+                &header_names,
+                check_duplicates || is_repair_mode,
+                key_col_idx,
+                cli.verbose,
+            );
+            global_stats.merge(batch_res);
+            batch_records.clear();
         }
     }
 
-    // Infer dominant types for each column
-    let inferred_types: Vec<DataType> = type_stats.iter().map(infer_type).collect();
+    if !batch_records.is_empty() {
+        let batch_res = process_pass1_batch(
+            &batch_records,
+            col_count,
+            &header_names,
+            check_duplicates || is_repair_mode,
+            key_col_idx,
+            cli.verbose,
+        );
+        global_stats.merge(batch_res);
+        batch_records.clear();
+    }
 
-    // Compute outlier bounds and medians for numeric columns
+    // Infer dominant types for each column
+    let inferred_types: Vec<DataType> = global_stats.type_stats.iter().map(infer_type).collect();
+
+    // Multi-core parallel sorting and global IQR computation
     let mut outlier_bounds: Vec<Option<OutlierBounds>> = Vec::with_capacity(col_count);
     let mut col_medians: Vec<Option<f64>> = Vec::with_capacity(col_count);
+
     for col_idx in 0..col_count {
         if inferred_types[col_idx].is_numeric() {
-            let mut vals = numeric_values[col_idx].clone();
-            vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            outlier_bounds.push(compute_outlier_bounds(&vals));
-            col_medians.push(calculate_median(&vals));
+            // Sort full global numbers vector in parallel across all CPU cores
+            global_stats.numeric_values[col_idx].par_sort_unstable_by(|a, b| {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            outlier_bounds.push(compute_outlier_bounds(&global_stats.numeric_values[col_idx]));
+            col_medians.push(calculate_median(&global_stats.numeric_values[col_idx]));
         } else {
             outlier_bounds.push(None);
             col_medians.push(None);
         }
     }
 
-    // For full-row duplicates, mark duplicates (indices > 1)
-    if key_col_idx.is_none() && (check_duplicates || is_repair_mode) {
-        for items in row_hashes.values() {
-            if items.len() > 1 {
-                let mut seen_fields: Vec<Vec<String>> = Vec::new();
-                for (row_no, fields) in items {
-                    if seen_fields.contains(fields) {
-                        duplicate_row_indices.insert(*row_no);
-                    } else {
-                        seen_fields.push(fields.clone());
+    // Resolve duplicate row indices
+    let mut duplicate_row_indices: HashSet<usize> = HashSet::new();
+    let mut duplicate_groups: Vec<(String, Vec<usize>)> = Vec::new();
+    let mut total_duplicate_rows = 0usize;
+
+    if check_duplicates || is_repair_mode {
+        if let Some(col_idx) = key_col_idx {
+            let key_name = &header_names[col_idx];
+            let mut key_map: HashMap<String, Vec<usize>> = HashMap::new();
+            for (key_val, row_no) in global_stats.key_occurrences {
+                key_map.entry(key_val).or_default().push(row_no);
+            }
+
+            for (key_val, rows) in key_map {
+                if rows.len() > 1 {
+                    total_duplicate_rows += rows.len() - 1;
+                    for &r in &rows[1..] {
+                        duplicate_row_indices.insert(r);
+                    }
+                    duplicate_groups.push((
+                        format!("Key '{}' = \"{}\"", key_name, key_val),
+                        rows,
+                    ));
+                }
+            }
+        } else {
+            let mut hash_map: HashMap<u64, Vec<(usize, Vec<String>)>> = HashMap::new();
+            for (h, row_no, fields) in global_stats.row_hashes {
+                hash_map.entry(h).or_default().push((row_no, fields));
+            }
+
+            for items in hash_map.values() {
+                if items.len() > 1 {
+                    let mut clusters: Vec<Vec<usize>> = Vec::new();
+                    let mut cluster_fields: Vec<Vec<String>> = Vec::new();
+
+                    for (row_no, fields) in items {
+                        let mut found_cluster = false;
+                        for (c_idx, c_fields) in cluster_fields.iter().enumerate() {
+                            if *c_fields == *fields {
+                                clusters[c_idx].push(*row_no);
+                                found_cluster = true;
+                                break;
+                            }
+                        }
+                        if !found_cluster {
+                            cluster_fields.push(fields.clone());
+                            clusters.push(vec![*row_no]);
+                        }
+                    }
+
+                    for cluster in clusters {
+                        if cluster.len() > 1 {
+                            total_duplicate_rows += cluster.len() - 1;
+                            for &r in &cluster[1..] {
+                                duplicate_row_indices.insert(r);
+                            }
+                            duplicate_groups.push(("Identical full row".to_string(), cluster));
+                        }
                     }
                 }
             }
         }
+        duplicate_groups.sort_by_key(|(_, rows)| rows.first().copied().unwrap_or(0));
     }
 
-    // Pass 2: Type mismatches & Outlier detection
-    let mut mismatch_counts = vec![0usize; col_count];
-    let mut mismatch_details: Vec<(usize, String, &'static str, String, &'static str)> =
-        Vec::new();
-
-    let mut outlier_counts = vec![0usize; col_count];
-    let mut outlier_details: Vec<(usize, String, f64, String, String, f64, f64)> = Vec::new();
+    // Pass 2: Type mismatches & Outlier detection evaluated concurrently
+    let mut pass2_res = Pass2BatchResult::new(col_count);
 
     if check_types || check_outliers {
         if let Err(err) = file.seek(std::io::SeekFrom::Start(0)) {
@@ -880,144 +980,46 @@ fn main() {
             .flexible(true)
             .from_reader(&file);
 
+        let mut pass2_batch: Vec<(usize, csv::StringRecord)> = Vec::with_capacity(BATCH_SIZE);
+
         for (row_idx, result) in rdr2.records().enumerate() {
             let record = match result {
                 Ok(rec) => rec,
                 Err(_) => continue,
             };
 
-            for (col_idx, field) in record.iter().enumerate() {
-                if col_idx < col_count {
-                    if is_missing_value(field) {
-                        continue;
-                    }
+            pass2_batch.push((row_idx + 1, record));
 
-                    let expected = inferred_types[col_idx];
-
-                    // Check type mismatch
-                    if check_types {
-                        if let Err(reason) = validate_type_match(field, expected) {
-                            mismatch_counts[col_idx] += 1;
-                            if mismatch_details.len() < 10 || cli.verbose {
-                                mismatch_details.push((
-                                    row_idx + 1,
-                                    header_names[col_idx].clone(),
-                                    expected.name(),
-                                    field.to_string(),
-                                    reason,
-                                ));
-                            }
-                        }
-                    }
-
-                    // Check outlier (only if column is numeric and value parses as number)
-                    if check_outliers && expected.is_numeric() {
-                        if let Some(bounds) = &outlier_bounds[col_idx] {
-                            if let Ok(val) = field.trim().parse::<f64>() {
-                                let is_outlier =
-                                    val < bounds.lower_bound || val > bounds.upper_bound;
-                                if is_outlier {
-                                    outlier_counts[col_idx] += 1;
-                                    let reason = if val > bounds.upper_bound {
-                                        if bounds.iqr > 0.0 {
-                                            format!(
-                                                "Exceeds upper bound {} (+{:.1}x IQR)",
-                                                format_num(bounds.upper_bound),
-                                                (val - bounds.q3) / bounds.iqr
-                                            )
-                                        } else {
-                                            format!(
-                                                "Exceeds identical bound {}",
-                                                format_num(bounds.upper_bound)
-                                            )
-                                        }
-                                    } else {
-                                        if bounds.iqr > 0.0 {
-                                            format!(
-                                                "Below lower bound {} (-{:.1}x IQR)",
-                                                format_num(bounds.lower_bound),
-                                                (bounds.q1 - val) / bounds.iqr
-                                            )
-                                        } else {
-                                            format!(
-                                                "Below identical bound {}",
-                                                format_num(bounds.lower_bound)
-                                            )
-                                        }
-                                    };
-
-                                    if outlier_details.len() < 10 || cli.verbose {
-                                        let range_str = format!(
-                                            "[{}, {}]",
-                                            format_num(bounds.lower_bound),
-                                            format_num(bounds.upper_bound)
-                                        );
-                                        outlier_details.push((
-                                            row_idx + 1,
-                                            header_names[col_idx].clone(),
-                                            val,
-                                            range_str,
-                                            reason,
-                                            bounds.lower_bound,
-                                            bounds.upper_bound,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            if pass2_batch.len() >= BATCH_SIZE {
+                let res = process_pass2_batch(
+                    &pass2_batch,
+                    col_count,
+                    &header_names,
+                    &inferred_types,
+                    &outlier_bounds,
+                    check_types,
+                    check_outliers,
+                    cli.verbose,
+                );
+                pass2_res.merge(res);
+                pass2_batch.clear();
             }
         }
-    }
 
-    // Duplicate detection processing for display
-    let mut duplicate_groups: Vec<(String, Vec<usize>)> = Vec::new();
-    let mut total_duplicate_rows = 0usize;
-
-    if check_duplicates {
-        if let Some(col_idx) = key_col_idx {
-            let key_name = &header_names[col_idx];
-            for (key_val, rows) in key_occurrences {
-                if rows.len() > 1 {
-                    total_duplicate_rows += rows.len() - 1;
-                    duplicate_groups.push((
-                        format!("Key '{}' = \"{}\"", key_name, key_val),
-                        rows,
-                    ));
-                }
-            }
-        } else {
-            for (_hash, items) in row_hashes {
-                if items.len() > 1 {
-                    let mut clusters: Vec<Vec<usize>> = Vec::new();
-                    let mut cluster_fields: Vec<Vec<String>> = Vec::new();
-
-                    for (row_no, fields) in items {
-                        let mut found_cluster = false;
-                        for (c_idx, c_fields) in cluster_fields.iter().enumerate() {
-                            if *c_fields == fields {
-                                clusters[c_idx].push(row_no);
-                                found_cluster = true;
-                                break;
-                            }
-                        }
-                        if !found_cluster {
-                            cluster_fields.push(fields);
-                            clusters.push(vec![row_no]);
-                        }
-                    }
-
-                    for cluster in clusters {
-                        if cluster.len() > 1 {
-                            total_duplicate_rows += cluster.len() - 1;
-                            duplicate_groups.push(("Identical full row".to_string(), cluster));
-                        }
-                    }
-                }
-            }
+        if !pass2_batch.is_empty() {
+            let res = process_pass2_batch(
+                &pass2_batch,
+                col_count,
+                &header_names,
+                &inferred_types,
+                &outlier_bounds,
+                check_types,
+                check_outliers,
+                cli.verbose,
+            );
+            pass2_res.merge(res);
+            pass2_batch.clear();
         }
-        duplicate_groups.sort_by_key(|(_, rows)| rows.first().copied().unwrap_or(0));
     }
 
     // ---------------- REPAIR / PATCH EXECUTION ----------------
@@ -1058,7 +1060,6 @@ fn main() {
             }
         };
 
-        // Write header
         if let Err(err) = writer.write_record(&headers) {
             eprintln!("Error writing CSV header: {}", err);
             process::exit(1);
@@ -1082,13 +1083,11 @@ fn main() {
 
             let row_no = row_idx + 1;
 
-            // Pinpoint drop check
             if pinpoint_drop_rows.contains(&row_no) {
                 pinpoint_rows_dropped_list.push(row_no);
                 continue;
             }
 
-            // Duplicate row drop check
             if do_drop_dups && duplicate_row_indices.contains(&row_no) {
                 duplicates_dropped += 1;
                 continue;
@@ -1102,7 +1101,6 @@ fn main() {
                     break;
                 }
 
-                // Check if this cell has a surgical patch
                 let raw_val = if let Some(patched_val) = surgical_patches.get(&(row_no, col_idx)) {
                     patches_applied_list.push(PatchAppliedJson {
                         row: row_no,
@@ -1138,7 +1136,6 @@ fn main() {
                 } else {
                     let trimmed = raw_val.trim();
 
-                    // Check Outliers
                     if do_drop_outliers && expected.is_numeric() {
                         if let Some(bounds) = &outlier_bounds[col_idx] {
                             if let Ok(num) = trimmed.parse::<f64>() {
@@ -1151,7 +1148,6 @@ fn main() {
                         }
                     }
 
-                    // Check Type validation and coercion
                     match expected {
                         DataType::Integer => {
                             if is_int_val(trimmed) {
@@ -1218,7 +1214,6 @@ fn main() {
                 }
             }
 
-            // Fill missing trailing columns
             while clean_fields.len() < col_count && !drop_this_row {
                 clean_fields.push(String::new());
             }
@@ -1234,7 +1229,6 @@ fn main() {
 
         let _ = writer.flush();
 
-        // If in-place modification requested, atomically rename temp file
         let final_destination = if is_temp_in_place {
             if let Err(err) = std::fs::rename(&out_path, &target_path) {
                 eprintln!("Error replacing original file in-place: {}", err);
@@ -1251,7 +1245,14 @@ fn main() {
             + missing_rows_dropped
             + pinpoint_rows_dropped_list.len();
 
-        if cli.fix || cli.drop_duplicates || cli.drop_invalid || cli.drop_outliers || cli.drop_missing || cli.fill_missing || cli.coerce_types {
+        if cli.fix
+            || cli.drop_duplicates
+            || cli.drop_invalid
+            || cli.drop_outliers
+            || cli.drop_missing
+            || cli.fill_missing
+            || cli.coerce_types
+        {
             repair_report_data = Some(RepairReportJson {
                 input_file: target_path.display().to_string(),
                 output_file: final_destination.display().to_string(),
@@ -1385,16 +1386,16 @@ fn main() {
     // ---------------- IF JSON OUTPUT REQUESTED ----------------
     if cli.json {
         let missing_json = if check_missing {
-            let total_missing: usize = missing_counts.iter().sum();
+            let total_missing: usize = global_stats.missing_counts.iter().sum();
             let missing_pct = if total_rows > 0 {
-                (rows_with_missing as f64 / total_rows as f64) * 100.0
+                (global_stats.rows_with_missing_count as f64 / total_rows as f64) * 100.0
             } else {
                 0.0
             };
 
             let cols: Vec<MissingColJson> = header_names
                 .iter()
-                .zip(missing_counts.iter())
+                .zip(global_stats.missing_counts.iter())
                 .enumerate()
                 .map(|(i, (name, &count))| {
                     let pct = if total_rows > 0 {
@@ -1412,8 +1413,10 @@ fn main() {
                 })
                 .collect();
 
-            let affected: Vec<MissingRowSampleJson> = missing_row_samples
+            let affected: Vec<MissingRowSampleJson> = global_stats
+                .missing_row_samples
                 .iter()
+                .take(10)
                 .map(|(row, cols)| MissingRowSampleJson {
                     row: *row,
                     missing_columns: cols.clone(),
@@ -1422,7 +1425,7 @@ fn main() {
 
             Some(MissingReportJson {
                 total_missing_values: total_missing,
-                rows_with_missing,
+                rows_with_missing: global_stats.rows_with_missing_count,
                 rows_with_missing_pct: (missing_pct * 100.0).round() / 100.0,
                 columns: cols,
                 affected_rows: affected,
@@ -1432,12 +1435,12 @@ fn main() {
         };
 
         let type_json = if check_types {
-            let total_mismatches: usize = mismatch_counts.iter().sum();
+            let total_mismatches: usize = pass2_res.mismatch_counts.iter().sum();
             let cols: Vec<TypeColJson> = header_names
                 .iter()
                 .zip(inferred_types.iter())
-                .zip(mismatch_counts.iter())
-                .zip(type_stats.iter())
+                .zip(pass2_res.mismatch_counts.iter())
+                .zip(global_stats.type_stats.iter())
                 .enumerate()
                 .map(|(i, (((name, &expected), &mismatches), stats))| TypeColJson {
                     index: i + 1,
@@ -1449,8 +1452,10 @@ fn main() {
                 })
                 .collect();
 
-            let details: Vec<TypeMismatchDetailJson> = mismatch_details
+            let details: Vec<TypeMismatchDetailJson> = pass2_res
+                .mismatch_details
                 .iter()
+                .take(10)
                 .map(|(row, col, expected, found, reason)| TypeMismatchDetailJson {
                     row: *row,
                     column: col.clone(),
@@ -1470,12 +1475,12 @@ fn main() {
         };
 
         let outlier_json = if check_outliers {
-            let total_outliers: usize = outlier_counts.iter().sum();
+            let total_outliers: usize = pass2_res.outlier_counts.iter().sum();
             let cols: Vec<OutlierColJson> = header_names
                 .iter()
                 .zip(inferred_types.iter())
                 .zip(outlier_bounds.iter())
-                .zip(outlier_counts.iter())
+                .zip(pass2_res.outlier_counts.iter())
                 .enumerate()
                 .map(|(i, (((name, &expected), bounds_opt), &count))| {
                     let is_num = expected.is_numeric();
@@ -1498,8 +1503,10 @@ fn main() {
                 })
                 .collect();
 
-            let details: Vec<OutlierDetailJson> = outlier_details
+            let details: Vec<OutlierDetailJson> = pass2_res
+                .outlier_details
                 .iter()
+                .take(10)
                 .map(|(row, col, val, _range_str, reason, lb, ub)| OutlierDetailJson {
                     row: *row,
                     column: col.clone(),
@@ -1582,7 +1589,7 @@ fn main() {
 
     // ---------------- MISSING VALUES REPORT ----------------
     if check_missing {
-        let total_missing: usize = missing_counts.iter().sum();
+        let total_missing: usize = global_stats.missing_counts.iter().sum();
 
         let mut summary_table = Table::new();
         summary_table
@@ -1614,9 +1621,9 @@ fn main() {
             Cell::new("Rows with Missing Values"),
             Cell::new(format!(
                 "{} ({:.2}%)",
-                rows_with_missing,
+                global_stats.rows_with_missing_count,
                 if total_rows > 0 {
-                    (rows_with_missing as f64 / total_rows as f64) * 100.0
+                    (global_stats.rows_with_missing_count as f64 / total_rows as f64) * 100.0
                 } else {
                     0.0
                 }
@@ -1638,7 +1645,7 @@ fn main() {
                 "Status",
             ]);
 
-        for (i, (name, &count)) in header_names.iter().zip(missing_counts.iter()).enumerate() {
+        for (i, (name, &count)) in header_names.iter().zip(global_stats.missing_counts.iter()).enumerate() {
             let pct = if total_rows > 0 {
                 (count as f64 / total_rows as f64) * 100.0
             } else {
@@ -1662,12 +1669,12 @@ fn main() {
 
         println!("{}", col_table);
 
-        if !missing_row_samples.is_empty() {
+        if !global_stats.missing_row_samples.is_empty() {
             println!("\n⚠️ Rows with Missing Values:");
             let sample_limit = if cli.verbose {
-                missing_row_samples.len()
+                global_stats.missing_row_samples.len()
             } else {
-                missing_row_samples.len().min(10)
+                global_stats.missing_row_samples.len().min(10)
             };
 
             let mut row_table = Table::new();
@@ -1676,7 +1683,7 @@ fn main() {
                 .apply_modifier(UTF8_ROUND_CORNERS)
                 .set_header(vec!["Row #", "Missing Columns"]);
 
-            for (row_no, missing_cols) in &missing_row_samples[..sample_limit] {
+            for (row_no, missing_cols) in &global_stats.missing_row_samples[..sample_limit] {
                 row_table.add_row(vec![
                     Cell::new(row_no.to_string()),
                     Cell::new(missing_cols.join(", ")),
@@ -1685,10 +1692,10 @@ fn main() {
 
             println!("{}", row_table);
 
-            if !cli.verbose && rows_with_missing > 10 {
+            if !cli.verbose && global_stats.rows_with_missing_count > 10 {
                 println!(
                     "💡 Showing first 10 of {} affected rows. Use --verbose to see all rows.",
-                    rows_with_missing
+                    global_stats.rows_with_missing_count
                 );
             }
         } else {
@@ -1698,7 +1705,7 @@ fn main() {
 
     // ---------------- TYPE MISMATCH REPORT ----------------
     if check_types {
-        let total_mismatches: usize = mismatch_counts.iter().sum();
+        let total_mismatches: usize = pass2_res.mismatch_counts.iter().sum();
 
         println!("\n🏷️ Type Mismatch Validation Report:");
 
@@ -1718,8 +1725,8 @@ fn main() {
         for (i, (((name, &expected), &mismatches), stats)) in header_names
             .iter()
             .zip(inferred_types.iter())
-            .zip(mismatch_counts.iter())
-            .zip(type_stats.iter())
+            .zip(pass2_res.mismatch_counts.iter())
+            .zip(global_stats.type_stats.iter())
             .enumerate()
         {
             let status = if mismatches == 0 {
@@ -1740,12 +1747,12 @@ fn main() {
 
         println!("{}", type_table);
 
-        if !mismatch_details.is_empty() {
+        if !pass2_res.mismatch_details.is_empty() {
             println!("\n⚠️ Type Mismatch Details:");
             let detail_limit = if cli.verbose {
-                mismatch_details.len()
+                pass2_res.mismatch_details.len()
             } else {
-                mismatch_details.len().min(10)
+                pass2_res.mismatch_details.len().min(10)
             };
 
             let mut detail_table = Table::new();
@@ -1761,7 +1768,7 @@ fn main() {
                 ]);
 
             for (row_no, col_name, expected_type, found_val, reason) in
-                &mismatch_details[..detail_limit]
+                &pass2_res.mismatch_details[..detail_limit]
             {
                 detail_table.add_row(vec![
                     Cell::new(row_no.to_string()),
@@ -1787,7 +1794,7 @@ fn main() {
 
     // ---------------- OUTLIER DETECTION REPORT ----------------
     if check_outliers {
-        let total_outliers: usize = outlier_counts.iter().sum();
+        let total_outliers: usize = pass2_res.outlier_counts.iter().sum();
 
         println!("\n📈 Outlier Detection Report (Method: IQR):");
 
@@ -1826,7 +1833,7 @@ fn main() {
 
             match bounds_opt {
                 Some(b) => {
-                    let count = outlier_counts[i];
+                    let count = pass2_res.outlier_counts[i];
                     let status = if count == 0 {
                         Cell::new("✔ Clean").fg(Color::Green)
                     } else {
@@ -1863,12 +1870,12 @@ fn main() {
 
         println!("{}", outlier_table);
 
-        if !outlier_details.is_empty() {
+        if !pass2_res.outlier_details.is_empty() {
             println!("\n⚠️ Outlier Details:");
             let detail_limit = if cli.verbose {
-                outlier_details.len()
+                pass2_res.outlier_details.len()
             } else {
-                outlier_details.len().min(10)
+                pass2_res.outlier_details.len().min(10)
             };
 
             let mut detail_table = Table::new();
@@ -1884,7 +1891,7 @@ fn main() {
                 ]);
 
             for (row_no, col_name, val, range_str, reason, _lb, _ub) in
-                &outlier_details[..detail_limit]
+                &pass2_res.outlier_details[..detail_limit]
             {
                 detail_table.add_row(vec![
                     Cell::new(row_no.to_string()),
@@ -2003,4 +2010,195 @@ fn main() {
             println!("\n🎉 No duplicate rows detected!");
         }
     }
+}
+
+fn process_pass1_batch(
+    records: &[(usize, csv::StringRecord)],
+    col_count: usize,
+    header_names: &[String],
+    do_duplicates: bool,
+    key_col_idx: Option<usize>,
+    verbose: bool,
+) -> BatchStats {
+    records
+        .par_chunks(PAR_CHUNK_SIZE)
+        .map(|chunk| {
+            let mut local = BatchStats::new(col_count);
+            for (row_no, record) in chunk {
+                let mut row_has_missing = false;
+                let mut missing_cols_in_row = Vec::new();
+
+                for (col_idx, field) in record.iter().enumerate() {
+                    if col_idx < col_count {
+                        if is_missing_value(field) {
+                            local.missing_counts[col_idx] += 1;
+                            row_has_missing = true;
+                            missing_cols_in_row.push(header_names[col_idx].clone());
+                        } else {
+                            let trimmed = field.trim();
+                            local.type_stats[col_idx].total_non_missing += 1;
+
+                            let mut is_num = false;
+                            if is_int_val(trimmed) {
+                                local.type_stats[col_idx].int_count += 1;
+                                is_num = true;
+                            } else if is_float_val(trimmed) {
+                                local.type_stats[col_idx].float_count += 1;
+                                is_num = true;
+                            } else if is_bool_val(trimmed) {
+                                local.type_stats[col_idx].bool_count += 1;
+                            } else if is_date_val(trimmed) {
+                                local.type_stats[col_idx].date_count += 1;
+                            }
+
+                            if is_num {
+                                if let Ok(num) = trimmed.parse::<f64>() {
+                                    local.numeric_values[col_idx].push(num);
+                                }
+                            }
+                        }
+                    } else if is_missing_value(field) {
+                        row_has_missing = true;
+                        missing_cols_in_row.push(format!("col_{}", col_idx + 1));
+                    }
+                }
+
+                if record.len() < col_count {
+                    row_has_missing = true;
+                    for col_idx in record.len()..col_count {
+                        local.missing_counts[col_idx] += 1;
+                        missing_cols_in_row.push(header_names[col_idx].clone());
+                    }
+                }
+
+                if row_has_missing {
+                    local.rows_with_missing_count += 1;
+                    if local.missing_row_samples.len() < 10 || verbose {
+                        local.missing_row_samples.push((*row_no, missing_cols_in_row));
+                    }
+                }
+
+                if do_duplicates {
+                    if let Some(col_idx) = key_col_idx {
+                        if col_idx < record.len() {
+                            let val = record[col_idx].trim().to_string();
+                            if !is_missing_value(&val) {
+                                local.key_occurrences.push((val, *row_no));
+                            }
+                        }
+                    } else {
+                        let h = hash_record(record);
+                        let fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+                        local.row_hashes.push((h, *row_no, fields));
+                    }
+                }
+            }
+            local
+        })
+        .reduce(|| BatchStats::new(col_count), |mut a, b| {
+            a.merge(b);
+            a
+        })
+}
+
+fn process_pass2_batch(
+    records: &[(usize, csv::StringRecord)],
+    col_count: usize,
+    header_names: &[String],
+    inferred_types: &[DataType],
+    outlier_bounds: &[Option<OutlierBounds>],
+    check_types: bool,
+    check_outliers: bool,
+    verbose: bool,
+) -> Pass2BatchResult {
+    records
+        .par_chunks(PAR_CHUNK_SIZE)
+        .map(|chunk| {
+            let mut local = Pass2BatchResult::new(col_count);
+            for (row_no, record) in chunk {
+                for (col_idx, field) in record.iter().enumerate() {
+                    if col_idx >= col_count || is_missing_value(field) {
+                        continue;
+                    }
+
+                    let expected = inferred_types[col_idx];
+
+                    if check_types {
+                        if let Err(reason) = validate_type_match(field, expected) {
+                            local.mismatch_counts[col_idx] += 1;
+                            if local.mismatch_details.len() < 10 || verbose {
+                                local.mismatch_details.push((
+                                    *row_no,
+                                    header_names[col_idx].clone(),
+                                    expected.name(),
+                                    field.to_string(),
+                                    reason,
+                                ));
+                            }
+                        }
+                    }
+
+                    if check_outliers && expected.is_numeric() {
+                        if let Some(bounds) = &outlier_bounds[col_idx] {
+                            if let Ok(val) = field.trim().parse::<f64>() {
+                                let is_outlier =
+                                    val < bounds.lower_bound || val > bounds.upper_bound;
+                                if is_outlier {
+                                    local.outlier_counts[col_idx] += 1;
+                                    let reason = if val > bounds.upper_bound {
+                                        if bounds.iqr > 0.0 {
+                                            format!(
+                                                "Exceeds upper bound {} (+{:.1}x IQR)",
+                                                format_num(bounds.upper_bound),
+                                                (val - bounds.q3) / bounds.iqr
+                                            )
+                                        } else {
+                                            format!(
+                                                "Exceeds identical bound {}",
+                                                format_num(bounds.upper_bound)
+                                            )
+                                        }
+                                    } else {
+                                        if bounds.iqr > 0.0 {
+                                            format!(
+                                                "Below lower bound {} (-{:.1}x IQR)",
+                                                format_num(bounds.lower_bound),
+                                                (bounds.q1 - val) / bounds.iqr
+                                            )
+                                        } else {
+                                            format!(
+                                                "Below identical bound {}",
+                                                format_num(bounds.lower_bound)
+                                            )
+                                        }
+                                    };
+
+                                    if local.outlier_details.len() < 10 || verbose {
+                                        let range_str = format!(
+                                            "[{}, {}]",
+                                            format_num(bounds.lower_bound),
+                                            format_num(bounds.upper_bound)
+                                        );
+                                        local.outlier_details.push((
+                                            *row_no,
+                                            header_names[col_idx].clone(),
+                                            val,
+                                            range_str,
+                                            reason,
+                                            bounds.lower_bound,
+                                            bounds.upper_bound,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            local
+        })
+        .reduce(|| Pass2BatchResult::new(col_count), |mut a, b| {
+            a.merge(b);
+            a
+        })
 }
