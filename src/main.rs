@@ -73,7 +73,7 @@ struct Cli {
     key: Option<String>,
 
     /// Run full audit (missing values, type mismatches, outliers, and duplicates)
-    #[arg(short = 'a', long = "audit")]
+    #[arg(short = 'a', long = "audit", alias = "search")]
     audit: bool,
 
     /// Number of worker threads to use (defaults to all available CPU cores)
