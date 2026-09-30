@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>HANDLER: The Definitive User Guide & Technical Manual</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  @page {
+    size: A4;
+    margin: 18mm 16mm 18mm 16mm;
+    @bottom-right {
+      content: counter(page);
+      font-family: 'Inter', sans-serif;
+      font-size: 8pt;
+      color: #94a3b8;
+    }
+    @bottom-left {
+      content: "HANDLER User Manual • v1.0.0";
+      font-family: 'Inter', sans-serif;
+      font-size: 8pt;
+      color: #94a3b8;
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #1e293b;
+    background: #ffffff;
+    line-height: 1.55;
+    font-size: 9.5pt;
+  }
+
+  .page-break {
+    page-break-after: always;
+  }
+
+  .avoid-break {
+    page-break-inside: avoid;
+  }
+
+  /* Cover Page */
+  .cover {
+    height: 100%;
+    min-height: 250mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 40px 20px 20px 20px;
+  }
+
+  .cover-top {
+    margin-top: 40px;
+  }
+
+  .badge-tag {
+    display: inline-block;
+    padding: 4px 12px;
+    background: #e0e7ff;
+    color: #4338ca;
+    font-weight: 700;
+    font-size: 9pt;
+    border-radius: 9999px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 20px;
+  }
+
+  .cover h1 {
+    font-size: 38pt;
+    font-weight: 800;
+    line-height: 1.1;
+    color: #0f172a;
+    letter-spacing: -0.03em;
+    margin-bottom: 12px;
+  }
+
+  .cover h1 span {
+    color: #4f46e5;
+  }
+
+  .cover-subtitle {
+    font-size: 15pt;
+    color: #475569;
+    font-weight: 400;
+    line-height: 1.4;
+    max-width: 90%;
+    margin-bottom: 35px;
+  }
+
+  .cover-features-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-top: 30px;
+  }
+
+  .feature-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 16px;
+  }
+
+  .feature-card h3 {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #1e293b;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .feature-card p {
+    font-size: 8.5pt;
+    color: #64748b;
+    line-height: 1.45;
+  }
+
+  .cover-footer {
+    border-top: 1px solid #e2e8f0;
+    padding-top: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+
+  .meta-label {
+    font-size: 7.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+    margin-bottom: 2px;
+  }
+
+  .meta-val {
+    font-size: 9.5pt;
+    font-weight: 600;
+    color: #334155;
+  }
+
+  /* Headings & Structure */
+  h2 {
+    font-size: 18pt;
+    font-weight: 800;
+    color: #0f172a;
+    letter-spacing: -0.02em;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 6px;
+    margin-top: 24px;
+    margin-bottom: 12px;
+  }
+
+  h3 {
+    font-size: 12pt;
+    font-weight: 700;
+    color: #1e293b;
+    margin-top: 16px;
+    margin-bottom: 8px;
+  }
+
+  h4 {
+    font-size: 10pt;
+    font-weight: 700;
+    color: #334155;
+    margin-top: 12px;
+    margin-bottom: 6px;
+  }
+
+  p {
+    margin-bottom: 10px;
+    color: #334155;
+  }
+
+  ul, ol {
+    margin-left: 20px;
+    margin-bottom: 12px;
+    color: #334155;
+  }
+
+  li {
+    margin-bottom: 4px;
+  }
+
+  /* Code Blocks */
+  pre {
+    background: #0f172a;
+    color: #f8fafc;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8.2pt;
+    padding: 12px 14px;
+    border-radius: 8px;
+    margin: 8px 0 12px 0;
+    overflow-x: hidden;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.45;
+  }
+
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8.5pt;
+    background: #f1f5f9;
+    color: #0f172a;
+    padding: 1.5px 5px;
+    border-radius: 4px;
+    border: 1px solid #e2e8f0;
+  }
+
+  pre code {
+    background: transparent;
+    border: none;
+    color: inherit;
+    padding: 0;
+  }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 16px 0;
+    font-size: 8.5pt;
+  }
+
+  th, td {
+    padding: 7px 10px;
+    text-align: left;
+    border: 1px solid #e2e8f0;
+  }
+
+  th {
+    background: #f8fafc;
+    font-weight: 700;
+    color: #1e293b;
+    border-bottom: 2px solid #cbd5e1;
+  }
+
+  tr:nth-child(even) td {
+    background: #fbfcfe;
+  }
+
+  /* Callout Boxes */
+  .callout {
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin: 12px 0;
+    font-size: 8.8pt;
+    border-left: 4px solid;
+  }
+
+  .callout-info {
+    background: #f0fdf4;
+    border-left-color: #16a34a;
+    color: #166534;
+  }
+
+  .callout-warning {
+    background: #fffbeb;
+    border-left-color: #f59e0b;
+    color: #92400e;
+  }
+
+  .callout-indigo {
+    background: #eef2ff;
+    border-left-color: #4f46e5;
+    color: #3730a3;
+  }
+
+  .callout-title {
+    font-weight: 700;
+    margin-bottom: 3px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* Visual Step Indicator */
+  .step-box {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin: 12px 0;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    padding: 10px 12px;
+    border-radius: 8px;
+  }
+
+  .step-num {
+    background: #4f46e5;
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 9pt;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .step-content h4 {
+    margin-top: 0;
+    margin-bottom: 3px;
+    font-size: 9.5pt;
+  }
+
+  .step-content p {
+    font-size: 8.5pt;
+    margin-bottom: 0;
+    color: #475569;
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= COVER PAGE ================= -->
+<div class="cover page-break">
+  <div class="cover-top">
+    <div class="badge-tag">Official Handbook • v1.0.0</div>
+    <h1>HANDLER <span>⚡</span></h1>
+    <div class="cover-subtitle">The Complete Guide to CSV Data Auditing, Surgical Patching & Autonomous Remediation</div>
+    <p style="font-size: 10.5pt; color: #475569; line-height: 1.6; max-width: 88%;">
+      A modern, memory-efficient command-line utility built in Rust. Designed to turn dirty, unreliable tabular data into sanitized, production-ready datasets for humans and autonomous AI agents alike.
+    </p>
+
+    <div class="cover-features-grid">
+      <div class="feature-card">
+        <h3>🔍 4-in-1 Diagnostics</h3>
+        <p>Scans missing values, automatically infers column data types, detects statistical IQR outliers, and finds duplicate records in sub-second speeds.</p>
+      </div>
+      <div class="feature-card">
+        <h3>🩹 Surgical Pinpoint Patching</h3>
+        <p>Target exact cells by row index and column name to repair broken data with surgical precision, avoiding destructive blind row deletion.</p>
+      </div>
+      <div class="feature-card">
+        <h3>🛠️ Bulk Remediation Engine</h3>
+        <p>Deduplicate, coerce messy types, standardize missing tokens, or impute numerical medians automatically with <code>--fix</code>.</p>
+      </div>
+      <div class="feature-card">
+        <h3>🤖 Autonomous Agent Native</h3>
+        <p>Complete <code>--json</code> machine-readable output mode allowing LLMs and automated pipelines to audit, reason, and repair without human intervention.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="cover-footer">
+    <div>
+      <div class="meta-label">Author & Maintainer</div>
+      <div class="meta-val">Snehil Khokhar (@khokharsnehil45)</div>
+    </div>
+    <div>
+      <div class="meta-label">Implementation</div>
+      <div class="meta-val">Rust (Zero-dependency Runtime)</div>
+    </div>
+    <div>
+      <div class="meta-label">License</div>
+      <div class="meta-val">MIT Open Source</div>
+    </div>
+    <div>
+      <div class="meta-label">GitHub Repository</div>
+      <div class="meta-val">github.com/khokharsnehil45/handler</div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= CHAPTER 1 ================= -->
+<h2>1. Getting Started (Zero Knowledge Track)</h2>
+
+<p>
+Welcome to <strong>handler</strong>! If you have never used a terminal or command-line tool before, don't worry. This chapter walks you through what a command-line interface (CLI) is, how to install handler in 10 seconds, and how to inspect your very first file.
+</p>
+
+<h3>1.1 What is a Command-Line Tool?</h3>
+<p>
+A CLI is a program where you type short instructions (called commands) instead of clicking buttons in a graphical window. CLIs are preferred by software engineers, data scientists, and AI agents because they are:
+</p>
+<ul>
+  <li><strong>Blazing Fast:</strong> They start instantly without loading heavy graphical interfaces.</li>
+  <li><strong>Memory-Efficient:</strong> They stream files directly from disk without crashing your computer.</li>
+  <li><strong>Scriptable:</strong> You can chain them into automated scripts and scheduled cron jobs.</li>
+</ul>
+
+<h3>1.2 Instant 1-Command Installation (Linux & macOS)</h3>
+<p>
+You can install <code>handler</code> on any Linux or macOS system using standard <code>curl</code>. Open your Terminal application and paste the following line:
+</p>
+
+<pre><code>curl -sSL https://raw.githubusercontent.com/khokharsnehil45/handler/main/install.sh | bash</code></pre>
+
+<div class="callout callout-info">
+  <div class="callout-title">✔ What happens behind the scenes:</div>
+  The installer automatically detects your operating system and CPU architecture, downloads the precompiled binary from GitHub Releases, marks it executable, and places it in your path (<code>~/.local/bin/handler</code>).
+</div>
+
+<p>To verify that installation succeeded, run:</p>
+<pre><code>handler --version</code></pre>
+<p>You should see <code>handler 0.1.0</code> printed to your screen!</p>
+
+<h3>1.3 Anatomy of a CSV File</h3>
+<p>
+CSV stands for <strong>Comma-Separated Values</strong>. It is the most universal data format in the world. It looks like a plain text grid:
+</p>
+<pre><code>user_id,username,age,signup_date,is_active
+101,alex_m,25,2026-01-15,true
+102,sarah_k,30,2026-02-10,false
+103,john_d,twenty-two,2026-02-18,true</code></pre>
+<ul>
+  <li><strong>Header:</strong> The very first row defining the names of the columns.</li>
+  <li><strong>Rows:</strong> The individual data entries below the header.</li>
+  <li><strong>Cells:</strong> The individual fields separated by commas.</li>
+</ul>
+
+<div class="page-break"></div>
+
+<!-- ================= CHAPTER 2 ================= -->
+<h2>2. The 4 Diagnostic Audits</h2>
+
+<p>
+Real-world CSV files are notoriously dirty. People misspell words, databases export unformatted dates, sensors output offline codes, and copy-paste errors duplicate rows. <code>handler</code> provides 4 specialized audit engines to uncover these flaws.
+</p>
+
+<h3>2.1 Audit 1: Missing Value Detection (<code>--search_missing</code>)</h3>
+<p>
+Missing data isn't always just an empty cell. In practice, messy files contain various placeholder strings. <code>handler</code> recognizes:
+</p>
+<ul>
+  <li>Completely empty cells (<code>""</code>)</li>
+  <li>Whitespace-only cells (<code>"   "</code>)</li>
+  <li>Standard placeholder tokens: <code>NA</code>, <code>N/A</code>, <code>NaN</code>, <code>null</code>, <code>None</code>, <code>nil</code>, <code>-</code>, <code>?</code></li>
+</ul>
+
+<pre><code>handler data.csv --search_missing</code></pre>
+
+<p><strong>Example Output:</strong></p>
+<pre><code>🔍 Scanning 'data.csv' for missing values...
+
+╭──────────────────────────┬────────────╮
+│ Metric                   ┆ Value      │
+╞══════════════════════════╪════════════╡
+│ Total Rows (Data)        ┆ 10         │
+│ Total Missing Values     ┆ 6          │
+│ Rows with Missing Values ┆ 5 (50.0%)  │
+╰──────────────────────────┴────────────╯
+
+📊 Column Breakdown:
+╭───────┬─────────────┬───────────────┬───────────┬─────────────╮
+│ Index ┆ Column Name ┆ Missing Count ┆ Missing % ┆ Status      │
+╞═══════╪═════════════╪═══════════════╪═══════════╪═════════════╡
+│ 1     ┆ user_id     ┆ 0             ┆ 0.0%      ┆ ✔ Clean     │
+│ 2     ┆ age         ┆ 3             ┆ 30.0%     ┆ ✖ 3 missing │
+│ 3     ┆ email       ┆ 2             ┆ 20.0%     ┆ ✖ 2 missing │
+╰───────┴─────────────┴───────────────┴───────────┴─────────────╯</code></pre>
+
+<hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 16px 0;">
+
+<h3>2.2 Audit 2: Automatic Type Inference & Mismatches (<code>--search_types</code>)</h3>
+<p>
+Because CSV files store everything as text, software often breaks when a number column suddenly contains text. <code>handler</code> reads non-empty cells and mathematically infers the dominant expected type using a <strong>&ge;60% majority rule</strong>.
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>Supported Type</th>
+      <th>Pattern Recognized</th>
+      <th>Example Invalid Value Flagged</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Integer</strong></td>
+      <td>Whole numbers (<code>101</code>, <code>-42</code>)</td>
+      <td><code>"twenty"</code>, <code>"35.5"</code> (decimals in integer col)</td>
+    </tr>
+    <tr>
+      <td><strong>Float</strong></td>
+      <td>Decimals & scientific notation (<code>3.14</code>, <code>1e5</code>)</td>
+      <td><code>"$49.99"</code> (unstripped dollar sign)</td>
+    </tr>
+    <tr>
+      <td><strong>Boolean</strong></td>
+      <td><code>true</code>, <code>false</code>, <code>yes</code>, <code>no</code>, <code>1</code>, <code>0</code></td>
+      <td><code>"maybe"</code>, <code>"pending"</code></td>
+    </tr>
+    <tr>
+      <td><strong>Date</strong></td>
+      <td><code>YYYY-MM-DD</code> or <code>DD-MM-YYYY</code></td>
+      <td><code>"yesterday"</code>, <code>"2026/99/99"</code></td>
+    </tr>
+    <tr>
+      <td><strong>Text</strong></td>
+      <td>Fallback for arbitrary strings</td>
+      <td>Always clean (all strings valid)</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code>handler data.csv --search_types</code></pre>
+
+<p>Every mismatched cell is reported with its exact <strong>Row Number</strong>, <strong>Expected Type</strong>, <strong>Offending Value</strong>, and <strong>Clear Reason</strong>.</p>
+
+<div class="page-break"></div>
+
+<!-- ================= CHAPTER 2 CONTINUED ================= -->
+<h3>2.3 Audit 3: Statistical Outlier Detection (<code>--search_outliers</code>)</h3>
+<p>
+An outlier is a number that is technically valid, but statistically abnormal (e.g. <code>age = 240</code> or <code>salary = $9,500,000</code>). <code>handler</code> uses the industry-standard <strong>IQR (Interquartile Range) Method</strong>:
+</p>
+
+<div class="step-box">
+  <div class="step-num">1</div>
+  <div class="step-content">
+    <h4>Sort and Find Percentiles</h4>
+    <p>Computes the 25th percentile (Q1) and 75th percentile (Q3) of all valid numbers in the column.</p>
+  </div>
+</div>
+<div class="step-box">
+  <div class="step-num">2</div>
+  <div class="step-content">
+    <h4>Compute IQR Span</h4>
+    <p>IQR = Q3 - Q1 (the middle 50% spread of your data).</p>
+  </div>
+</div>
+<div class="step-box">
+  <div class="step-num">3</div>
+  <div class="step-content">
+    <h4>Establish Statistical Fences</h4>
+    <p>Lower Fence = <code>Q1 - 1.5 &times; IQR</code> &nbsp;|&nbsp; Upper Fence = <code>Q3 + 1.5 &times; IQR</code>.</p>
+  </div>
+</div>
+
+<pre><code>handler data.csv --search_outliers</code></pre>
+
+<p><strong>Example Output:</strong></p>
+<pre><code>📈 Outlier Detection Report (Method: IQR):
+╭───────┬─────────────┬───────────────┬────────────────────┬────────────────┬──────────┬────────────────╮
+│ Index ┆ Column Name ┆ Inferred Type ┆ IQR Expected Range ┆ Min / Max      ┆ Outliers ┆ Status         │
+╞═══════╪═════════════╪═══════════════╪════════════════════╪════════════════╪══════════╪════════════════╡
+│ 3     ┆ age         ┆ Integer       ┆ [16.56, 49.06]     ┆ 25 / 240       ┆ 1        ┆ ✖ 1 outlier(s) │
+│ 4     ┆ salary      ┆ Integer       ┆ [34125, 77125]     ┆ 48000 / 950000 ┆ 1        ┆ ✖ 1 outlier(s) │
+╰───────┴─────────────┴───────────────┴────────────────────┴────────────────┴──────────┴────────────────╯
+
+⚠️ Outlier Details:
+╭───────┬────────┬────────┬─────────────────┬────────────────────────────────────────╮
+│ Row # ┆ Column ┆ Value  ┆ IQR Valid Range ┆ Reason                                 │
+╞═══════╪════════╪════════╪═════════════════╪════════════════════════════════════════╡
+│ 10    ┆ age    ┆ 240    ┆ [16.56, 49.06]  ┆ Exceeds upper bound 49.06 (+25.0x IQR) │
+╰───────┴────────┴────────┴─────────────────┴────────────────────────────────────────╯</code></pre>
+
+<hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 16px 0;">
+
+<h3>2.4 Audit 4: Duplicate & Collision Detection (<code>--search_duplicates</code>)</h3>
+<p>
+Duplicates cause inflated metrics, false customer counts, and database primary key errors. <code>handler</code> supports two distinct scoping modes:
+</p>
+
+<h4>Mode A: Full-Row Identical Duplicates</h4>
+<p>Checks if every single column in row A is byte-for-byte identical to row B:</p>
+<pre><code>handler data.csv --search_duplicates</code></pre>
+
+<h4>Mode B: Key-Column Collision Detection (<code>--key &lt;COLUMN&gt;</code>)</h4>
+<p>Identifies rows that share the same unique identifier (such as <code>user_id</code> or <code>Email</code>), even if their other columns differ:</p>
+<pre><code>handler data.csv --key Email</code></pre>
+
+<pre><code>🔁 Duplicate Detection Report:
+╭────────────────────┬────────────────────╮
+│ Duplicate Metric   ┆ Value              │
+╞════════════════════╪════════════════════╡
+│ Scope              ┆ Key Column 'Email' │
+│ Total Rows         ┆ 12                 │
+│ Unique Records     ┆ 10                 │
+│ Duplicate Rows     ┆ 2 (16.67%)         │
+│ Duplicate Clusters ┆ 2                  │
+╰────────────────────┴────────────────────╯</code></pre>
+
+<div class="page-break"></div>
+
+<!-- ================= CHAPTER 3 & 4 ================= -->
+<h2>3. The Full Audit Command</h2>
+<p>
+Instead of running four separate commands, running <code>handler</code> directly on a CSV file automatically executes <strong>all four audits</strong> in a unified pass:
+</p>
+<pre><code>handler data.csv
+# or explicitly:
+handler data.csv --audit</code></pre>
+
+<div class="callout callout-indigo">
+  <div class="callout-title">💡 Inspecting all rows with --verbose</div>
+  By default, <code>handler</code> prints the first 10 offending rows to prevent overwhelming your terminal. When inspecting long reports, pass <code>--verbose</code> (or <code>-v</code>) to view every single affected row without truncation:
+  <pre style="margin-top: 6px;"><code>handler data.csv --verbose</code></pre>
+</div>
+
+<hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+
+<h2>4. Surgical Pinpoint Patching (Precision Editing)</h2>
+
+<p>
+The greatest danger in data cleaning is <strong>blind deletion</strong>. Throwing away an entire row because one cell has a typo causes significant data loss. <code>handler</code> introduces <strong>Surgical Pinpoint Patching</strong>.
+</p>
+
+<h3>4.1 Syntax: <code>--patch "ROW:COL=VALUE"</code></h3>
+<p>You can target any cell by its 1-based Row Number and Column Name:</p>
+<pre><code>handler data.csv --patch "3:age=22" --output clean.csv</code></pre>
+
+<p>Or target by 1-based Column Index:</p>
+<pre><code>handler data.csv --patch "3:3=22" --output clean.csv</code></pre>
+
+<h3>4.2 Patching Multiple Cells Simultaneously</h3>
+<p>You can pass multiple <code>--patch</code> arguments in a single execution:</p>
+<pre><code>handler data.csv \
+  --patch "3:age=22" \
+  --patch "5:signup_date=2026-03-01" \
+  --patch "7:is_active=true" \
+  --output clean.csv</code></pre>
+
+<h3>4.3 Surgical Row Dropping (<code>--drop-row</code>)</h3>
+<p>If a specific row is completely unsalvageable (e.g. Row 10 contains an impossible outlier), drop that single row:</p>
+<pre><code>handler data.csv --drop-row 10 --output clean.csv</code></pre>
+
+<h3>4.4 In-Place Editing (<code>--in-place</code>)</h3>
+<p>
+When modifying production data, you can apply edits directly to the source file without managing a second file. <code>handler</code> writes to a temporary file first and performs an <strong>atomic rename</strong> to ensure zero risk of file corruption:
+</p>
+<pre><code>handler data.csv --patch "3:age=22" --in-place</code></pre>
+
+<div class="page-break"></div>
+
+<!-- ================= CHAPTER 5 ================= -->
+<h2>5. Bulk Auto-Remediation (<code>--fix</code>)</h2>
+
+<p>
+When dealing with hundreds of dirty rows, manual patching is impractical. The bulk remediation engine (<code>--fix</code>) applies automated sanitation strategies to export a clean dataset.
+</p>
+
+<h3>5.1 The Smart Auto-Repair Preset</h3>
+<p>
+Running <code>handler data.csv --fix</code> automatically applies proven data-cleaning standards:
+</p>
+<pre><code>handler data.csv --fix --output clean.csv</code></pre>
+
+<ul>
+  <li><strong>Deduplication:</strong> Automatically drops duplicate rows, keeping only the first valid occurrence.</li>
+  <li><strong>Type Coercion:</strong> Coerces floats to whole numbers in integer columns (e.g. <code>35.5</code> &rarr; <code>36</code>) and normalizes boolean variants (<code>yes</code> &rarr; <code>true</code>).</li>
+  <li><strong>Token Standardization:</strong> Converts messy placeholders (<code>NA</code>, <code>null</code>, <code>None</code>) into clean empty strings (<code>""</code>).</li>
+  <li><strong>Drop Fatal Errors:</strong> Drops rows containing unparseable strings in numeric or date columns (e.g. <code>"twenty-two"</code> in an age column).</li>
+</ul>
+
+<h3>5.2 Granular Repair Strategies</h3>
+<p>
+Customize the remediation behavior to match your pipeline's exact requirements:
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Command Flag</th>
+      <th>Remediation Action</th>
+      <th>Best Used When...</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>--fill-missing</code></td>
+      <td>Imputes missing numeric cells with the column's <strong>statistical median</strong>.</td>
+      <td>Training ML models where nulls are rejected but dropping rows loses training data.</td>
+    </tr>
+    <tr>
+      <td><code>--drop-missing</code></td>
+      <td>Drops any row containing at least one missing cell.</td>
+      <td>Strict pipelines where synthetic imputation is forbidden.</td>
+    </tr>
+    <tr>
+      <td><code>--drop-outliers</code></td>
+      <td>Drops rows containing values outside the IQR fences.</td>
+      <td>Removing test artifacts, sensor glitches, or extreme fat-finger typos.</td>
+    </tr>
+    <tr>
+      <td><code>--drop-duplicates</code></td>
+      <td>Deduplicates rows or unique keys.</td>
+      <td>Ensuring single-customer records for marketing or billing systems.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>Example: Impute missing values with medians and drop outliers:</strong></p>
+<pre><code>handler data.csv --fix --fill-missing --drop-outliers --output final_dataset.csv</code></pre>
+
+<p><strong>Remediation Report Preview:</strong></p>
+<pre><code>🛠️ CSV Repair Report:
+╭────────────────────────────────┬───────────────────────────────────╮
+│ Repair Metric                  ┆ Value                             │
+╞════════════════════════════════╪═══════════════════════════════════╡
+│ Input File                     ┆ data.csv (12 rows)                │
+│ Output Clean File              ┆ final_dataset.csv (10 rows)       │
+│ Total Rows Dropped             ┆ 2 (16.7%)                         │
+│   - Duplicate Rows Dropped     ┆ 1                                 │
+│   - Outlier Rows Dropped       ┆ 1                                 │
+│ Cells Imputed (Filled)         ┆ 1 (median filled)                 │
+│ Values Coerced (Standardized)  ┆ 2                                 │
+│ Export Status                  ┆ ✔ Clean CSV Exported Successfully │
+╰────────────────────────────────┴───────────────────────────────────╯</code></pre>
+
+<div class="page-break"></div>
+
+<!-- ================= CHAPTER 6 ================= -->
+<h2>6. AI Agent Integration & Architecture (<code>--json</code>)</h2>
+
+<p>
+Large Language Models (LLMs) like GPT-4, Claude, and Gemini are powerful reasoning engines, but they perform poorly when processing raw CSV text directly in their context window:
+</p>
+<ul>
+  <li><strong>Context Window Waste:</strong> Loading a 50,000-line CSV consumes hundreds of thousands of tokens.</li>
+  <li><strong>Counting Hallucinations:</strong> LLMs struggle to accurately count line breaks and calculate statistical percentiles.</li>
+  <li><strong>High Financial Cost:</strong> Repeatedly prompting large tabular context is expensive and slow.</li>
+</ul>
+
+<h3>6.1 The Agentic Closed-Loop Pattern</h3>
+<p>
+<code>handler</code> serves as the perfect specialized tool for autonomous agents:
+</p>
+
+<pre><code>[AI AGENT] ───(1. Execute: handler data.csv --json)───► [HANDLER (Rust)]
+    ▲                                                          │
+    │                                                          ▼
+    └───(2. Receives compact structured JSON issues)───────────┘
+    │
+    ├───► [Agent analyzes exact row #, column, and reason]
+    │
+    └───(3. Execute: handler data.csv --patch "3:age=22" --in-place)──► [Clean!]</code></pre>
+
+<h3>6.2 Sample Machine-Readable JSON Payload</h3>
+<pre><code>{
+  "file_path": "data.csv",
+  "total_rows": 12,
+  "total_columns": 6,
+  "type_validation": {
+    "total_mismatches": 2,
+    "mismatch_details": [
+      {
+        "row": 3,
+        "column": "age",
+        "expected_type": "Integer",
+        "found_value": "twenty-two",
+        "reason": "Cannot parse as Integer"
+      }
+    ]
+  },
+  "outliers": {
+    "total_outliers": 1,
+    "outlier_details": [
+      {
+        "row": 10,
+        "column": "salary",
+        "value": 950000.0,
+        "lower_bound": 34125.0,
+        "upper_bound": 77125.0,
+        "reason": "Exceeds upper bound 77125 (+82.7x IQR)"
+      }
+    ]
+  }
+}</code></pre>
+
+<h3>6.3 Python Agent Tool Implementation Example</h3>
+<p>Here is how easily a Python agent can drive <code>handler</code>:</p>
+<pre><code>import subprocess, json
+
+def audit_csv(file_path: str):
+    """Run handler audit and return structured JSON."""
+    result = subprocess.run(["handler", file_path, "--json"], capture_output=True, text=True)
+    return json.loads(result.stdout)
+
+def patch_csv(file_path: str, patch_spec: str):
+    """Patch a specific cell, e.g. '3:age=22'."""
+    subprocess.run(["handler", file_path, "--patch", patch_spec, "--in-place"], check=True)</code></pre>
+
+<div class="page-break"></div>
+
+<!-- ================= CHAPTER 7 & CHEATSHEET ================= -->
+<h2>7. Real-World Benchmark (1,000,000 Rows)</h2>
+
+<p>
+To demonstrate real-world production performance, <code>handler</code> was tested against a <strong>1,000,000-row enterprise dataset</strong> (<code>customers-1000000.csv</code>, 12 columns, ~150 MB).
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Audit Task</th>
+      <th>Rows Processed</th>
+      <th>Execution Time</th>
+      <th>Key Discovery</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Missing Values Scan</td>
+      <td>1,000,000</td>
+      <td><strong>1.1 seconds</strong></td>
+      <td>0 missing values (100% complete)</td>
+    </tr>
+    <tr>
+      <td>Type Inference & Validation</td>
+      <td>1,000,000</td>
+      <td><strong>2.5 seconds</strong></td>
+      <td>Inferred 1 Integer, 1 Date, 10 Text columns</td>
+    </tr>
+    <tr>
+      <td>Statistical Outlier Check</td>
+      <td>1,000,000</td>
+      <td><strong>2.0 seconds</strong></td>
+      <td>Index column within normal range</td>
+    </tr>
+    <tr>
+      <td>Email Collision Detection</td>
+      <td>1,000,000</td>
+      <td><strong>2.1 seconds</strong></td>
+      <td><strong>Discovered 308 duplicate records across 307 email clusters!</strong></td>
+    </tr>
+    <tr>
+      <td>Surgical Patch + 1M File Export</td>
+      <td>1,000,000</td>
+      <td><strong>4.9 seconds</strong></td>
+      <td>Patched Row 570 and wrote 1M rows cleanly</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+
+<h2>8. Command-Line Reference & Cheat Sheet</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Command / Flag</th>
+      <th>Shorthand</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>handler &lt;FILE&gt;</code></td>
+      <td>-</td>
+      <td>Full health audit (Missing, Types, Outliers, Duplicates).</td>
+    </tr>
+    <tr>
+      <td><code>--search_missing</code></td>
+      <td><code>-s</code></td>
+      <td>Scan for empty cells, whitespace, and null tokens.</td>
+    </tr>
+    <tr>
+      <td><code>--search_types</code></td>
+      <td><code>-t</code></td>
+      <td>Audit for data type mismatches against inferred types.</td>
+    </tr>
+    <tr>
+      <td><code>--search_outliers</code></td>
+      <td><code>-o</code></td>
+      <td>Find statistical anomalies outside the 1.5 &times; IQR fences.</td>
+    </tr>
+    <tr>
+      <td><code>--search_duplicates</code></td>
+      <td><code>-d</code></td>
+      <td>Scan for byte-for-byte identical rows.</td>
+    </tr>
+    <tr>
+      <td><code>--key &lt;COL&gt;</code></td>
+      <td><code>-k</code></td>
+      <td>Scan for duplicate collisions on a primary identifier (e.g. <code>--key Email</code>).</td>
+    </tr>
+    <tr>
+      <td><code>--patch "ROW:COL=VAL"</code></td>
+      <td>-</td>
+      <td>Surgically update a specific cell (e.g. <code>--patch "3:age=22"</code>).</td>
+    </tr>
+    <tr>
+      <td><code>--drop-row &lt;ROW_NUM&gt;</code></td>
+      <td>-</td>
+      <td>Drop an individual row by index (e.g. <code>--drop-row 10</code>).</td>
+    </tr>
+    <tr>
+      <td><code>--in-place</code></td>
+      <td>-</td>
+      <td>Save edits directly to the input file atomically.</td>
+    </tr>
+    <tr>
+      <td><code>--fix</code></td>
+      <td>-</td>
+      <td>Trigger bulk auto-remediation (dedup, coerce, clean nulls).</td>
+    </tr>
+    <tr>
+      <td><code>--fill-missing</code></td>
+      <td>-</td>
+      <td>Impute missing numeric values with column medians.</td>
+    </tr>
+    <tr>
+      <td><code>--drop-outliers</code></td>
+      <td>-</td>
+      <td>Drop rows containing statistical outliers during repair.</td>
+    </tr>
+    <tr>
+      <td><code>--output &lt;PATH&gt;</code></td>
+      <td><code>-O</code></td>
+      <td>Specify destination path for sanitized CSV.</td>
+    </tr>
+    <tr>
+      <td><code>--json</code></td>
+      <td><code>-j</code></td>
+      <td>Emit machine-readable JSON for scripts and AI agents.</td>
+    </tr>
+    <tr>
+      <td><code>--verbose</code></td>
+      <td><code>-v</code></td>
+      <td>Display all affected rows without the 10-row truncation.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div style="margin-top: 40px; text-align: center; color: #94a3b8; font-size: 8pt;">
+  HANDLER Technical Handbook • Open-Source MIT License • GitHub: khokharsnehil45/handler
+</div>
+
+</body>
+</html>

@@ -3,8 +3,11 @@
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)]()
+[![Handbook PDF](https://img.shields.io/badge/Documentation-Handbook%20PDF-purple.svg)](docs/HANDLER_USER_GUIDE.pdf)
 
 > A fast, memory-efficient CLI tool and autonomous agent engine built with Rust for **auditing**, **surgically patching**, and **automatically repairing** CSV files.
+
+📘 **Read the Comprehensive Guide**: [**HANDLER_USER_GUIDE.pdf**](docs/HANDLER_USER_GUIDE.pdf) *(14-page guide from zero knowledge to advanced AI agent integration)*
 
 ---
 
