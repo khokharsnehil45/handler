@@ -49,8 +49,9 @@ elif [ -w "/usr/local/bin" ]; then
     INSTALL_DIR="/usr/local/bin"
 else
     INSTALL_DIR="${HOME}/.local/bin"
-    mkdir -p "${INSTALL_DIR}"
 fi
+
+mkdir -p "${INSTALL_DIR}"
 
 TMP_DIR="$(mktemp -d)"
 cleanup() {
